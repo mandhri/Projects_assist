@@ -179,10 +179,30 @@ results_sig_fc <- lapply(results_list, function(res) {
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+summary_list <- list()
 
-# 1) Collect gene IDs
-deg_union <- unique(unlist(lapply(results_sig_fc, rownames)))
+for (contrast_name in names(results_list)) {
+  res    <- results_list[[contrast_name]] 
+  res_df <- as.data.frame(res)
+  res_df$ensembl_gene_id <- sub("\\..*$","", rownames(res_df))
+  tested <- sum(!is.na(res_df$padj))
+
+  sig_df <- results_sig_fc[[contrast_name]]
+  if (is.null(sig_df)) sig_df <- res_df[0, , drop = FALSE] 
+  sig_df$ensembl_gene_id <- sub("\\..*$","", rownames(sig_df))
+
+  summary_list[[contrast_name]] <- data.frame(
+    contrast    = contrast_name,
+    tested_genes= tested,
+    sig_total   = nrow(sig_df),
+    sig_higher_in_male      = sum(sig_df$log2FoldChange > 0, na.rm = TRUE),
+    sig_higher_in_female    = sum(sig_df$log2FoldChange < 0, na.rm = TRUE)
+  )
+}
+
+summary_tbl <- do.call(rbind, summary_list)
+print(summary_tbl)
+
 
 ```
 
@@ -190,6 +210,11 @@ deg_union <- unique(unlist(lapply(results_sig_fc, rownames)))
 # Annotate DEGs with chromosome info
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+sig_ids_all <- unique(unlist(lapply(results_sig_fc, function(df) rownames(df)), use.names = FALSE))
+sig_ids_all <- sub("\\..*$", "", sig_ids_all) 
+
+
 
 
 ```
