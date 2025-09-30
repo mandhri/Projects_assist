@@ -1,0 +1,214 @@
+---
+title: "RNA-Seq_differential_expression_normalise_by_chromo"
+output: html_document
+date: "2025-09-30"
+---
+
+```{r,packages}
+
+
+suppressPackageStartupMessages({
+library("EnhancedVolcano")
+library("limma")
+library("biomaRt")
+library("annotables")
+library("tximport")
+library("apeglm")
+library("eulerr")
+library("DESeq2")
+library("HGNChelper")
+library("tictoc")
+library("DESeq2")
+library("kableExtra")
+library("beeswarm")
+library("missMethyl")
+library("gridExtra")
+library("png")
+library("metafor")
+library("ggplot2")
+library("purrr")
+library("metafor")
+library("dplyr")
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("magrittr")
+library("readr")
+library("eulerr")
+library("RColorBrewer")
+library("e1071")
+library("plotly") 
+library("pheatmap")
+
+})
+
+CORES=16
+
+```
+
+# Read the sample manifest and alignment summary
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+samples<-readRDS("/mnt/vol1/Projects_assist/counts_data.rds")
+
+pheno<-readRDS("/mnt/vol1/Projects_assist/colData.rds")
+pheno$ex_code <- rownames(pheno)
+
+stopifnot(all(colnames(samples) %in% pheno$ex_code))
+pheno <- pheno[match(colnames(samples), pheno$ex_code), ]
+stopifnot(identical(colnames(samples), pheno$ex_code))
+
+rownames(pheno) <- pheno$ex_code
+
+pheno$Seq_Batch <- relevel(pheno$Seq_Batch, ref = "1")
+pheno$Sex     <- relevel(pheno$Sex, ref = "Female")
+pheno$age_bin <- relevel(pheno$age_bin, ref = "a18_29")
+
+```
+
+# Making DESeqDataSetFromMatrix
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+dds_org <- DESeqDataSetFromMatrix(
+  countData = samples,
+  colData   = pheno,
+  design    = ~ Seq_Batch + age_bin + Sex + age_bin:Sex
+)
+
+```
+
+
+# Filtering for low count and normalisation of the counts
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+keep <- rowSums(counts(dds_org)) >= 10
+dds  <- dds_org[keep, ]
+
+dds   <- estimateSizeFactors(dds)
+norm_counts <- counts(dds, normalized = TRUE)
+
+head(norm_counts)
+
+
+```
+
+
+# Unsupervised clustering analyses and DE analysis
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+vsd <- vst(dds, blind = TRUE)
+
+# Example correlation heatmap (annotation from pheno)
+vsd_cor <- cor(assay(vsd))
+pheatmap(
+  vsd_cor,
+  annotation_col = pheno[, c("Sex","age_bin","Seq_Batch")],
+  annotation_row = pheno[, c("Sex","age_bin","Seq_Batch")]
+)
+
+# Fit model
+dds <- DESeq(dds)
+
+plotDispEsts(dds)
+
+
+```
+
+
+#  Model diagnostics
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+# Sample-wise QC with VST 
+vsd <- vst(dds, blind = TRUE)
+
+# PCA
+plotPCA(vsd, intgroup = c("Sex","age_bin","Seq_Batch"))
+plotPCA(vsd, intgroup = c("Sex", "age_bin"))
+plotPCA(vsd, intgroup = c("age_bin","Seq_Batch"))
+
+```
+
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+coefficients <- resultsNames(dds)
+print(coefficients)
+
+ref_age <- "a18_29"
+sex_main <- "Sex_Male_vs_Female"
+
+age_bins <- c("a30_39","a40_49","a50_59","a60_69","a70_79")
+
+missing_itx <- setdiff(paste0("age_bin", age_bins, ".SexMale"), coefficients)
+length(missing_itx)
+
+# Shrinkage reference bin (a18_29)
+
+results_list <- list()
+results_list[[ref_age]] <- lfcShrink(dds, coef = sex_main, type = "apeglm")
+
+# Other age bins use unshrunken list-contrast
+
+for (age in age_bins) {
+  int_term <- paste0("age_bin", age, ".SexMale")
+  results_list[[age]] <- results(dds, contrast = list(c("Sex_Male_vs_Female", int_term)))
+}
+
+# 3) Filter significant DEGs (padj < 0.05 & |LFC| > 1)
+results_sig_fc <- lapply(results_list, function(res) {
+  res_df <- as.data.frame(res)
+  subset(res_df, !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 1)
+})
+
+
+
+```
+
+# Annotate DEGs with chromosome info
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# 1) Collect gene IDs
+deg_union <- unique(unlist(lapply(results_sig_fc, rownames)))
+
+```
+
+
+# Annotate DEGs with chromosome info
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+```
+
+
+
+# Annotate DEGs with chromosome info
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+```
+
+
+# Annotate DEGs with chromosome info
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+```
+
+
