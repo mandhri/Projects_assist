@@ -211,9 +211,15 @@ print(summary_tbl)
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-sig_ids_all <- unique(unlist(lapply(results_sig_fc, function(df) rownames(df)), use.names = FALSE))
-sig_ids_all <- sub("\\..*$", "", sig_ids_all) 
+sig_ids <- unique(sub("\\..*$","", unlist(lapply(results_sig_fc, rownames), use.names = FALSE)))
 
+map <- annotables::grch38[, c("ensgene","chr")]
+map$ensgene <- sub("\\..*$","", map$ensgene)
+chrom_map <- setNames(map$chr, map$ensgene)
+
+# Fixed classes & palette
+classes<- c("Autosome","X","Y","MT","Other")
+pal<- setNames(RColorBrewer::brewer.pal(5, "Set2"), classes)
 
 
 
