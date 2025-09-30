@@ -221,7 +221,31 @@ chrom_map <- setNames(map$chr, map$ensgene)
 classes<- c("Autosome","X","Y","MT","Other")
 pal<- setNames(RColorBrewer::brewer.pal(5, "Set2"), classes)
 
+for (age in names(results_sig_fc)) {
+  df <- results_sig_fc[[age]]
+  if (is.null(df)) next
+  if (nrow(df) == 0) next
 
+  ids <- sub("\\..*$","", rownames(df))
+  chr <- chrom_map[ids]
+  cls <- ifelse(chr %in% as.character(1:22), "Autosome",
+         ifelse(chr %in% c("X","Y"), chr,
+         ifelse(chr %in% c("MT","M"), "MT", "Other")))
+
+  pie <- as.data.frame(prop.table(table(factor(cls, levels = classes))) * 100)
+  names(pie) <- c("chrom","prop")
+
+   g <- ggplot(pie, aes("", prop, fill = chrom)) +
+    geom_bar(stat = "identity", width = 1, color = "white") +
+    coord_polar("y") +
+    geom_text(aes(label = sprintf("%.1f%%", prop)),
+              position = position_stack(0.5), size = 3) +
+    scale_fill_manual(values = pal, drop = FALSE) +
+    theme_void() +
+    labs(title = paste("Chromosome distribution —", age), fill = "Chromosome")
+     print(g)
+
+}
 
 ```
 
