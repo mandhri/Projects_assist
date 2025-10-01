@@ -337,12 +337,6 @@ arm_sizes <- arm_table %>%
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-gene_arm <- gene_pos %>%
-  inner_join(arm_table, by = "chromosome_name") %>%
-  mutate(arm = ifelse(mid_bp < p_len_bp, "p", "q"),
-         chrom_arm = paste0(chromosome_name, arm)) %>%
-  select(ensembl_gene_id, chromosome_name, mid_bp, arm, chrom_arm)
-
 
 ```
 
