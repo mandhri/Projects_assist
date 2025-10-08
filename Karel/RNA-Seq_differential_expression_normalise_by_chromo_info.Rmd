@@ -98,7 +98,23 @@ head(norm_counts)
 ```
 
 
-# Unsupervised clustering analyses and DE analysis
+## Unsupervised clustering analyses and DE analysis
+
+Sample-to-sample structure was assessed on variance-stabilised counts (`vst`, blind = TRUE).  
+A correlation heat map was drawn with annotations for `Sex`, `age_bin`, and `Seq_Batch`.  
+Differential expression was then fitted on raw counts using the specified design, and dispersion
+estimates were inspected.
+
+### Heat map (sample–sample correlations)
+- High correlations (~0.94–1) across samples indicate consistent libraries.
+- A clear two-block structure suggests an expected batch effect.
+- `Sex` and `age_bin` appear mixed within each block, indicating no obvious confounding.
+
+### Dispersion plot
+- Gene-wise (black) dispersions decline with mean; the fitted trend (red) is smooth.
+- Final estimates (blue) largely follow the fit, consistent with effective shrinkage.
+- Wide spread at low means is expected; a few extremes likely reflect very sparse or near-constant genes.
+
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
