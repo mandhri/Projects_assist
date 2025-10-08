@@ -193,20 +193,25 @@ ggplot(pdat, aes(PC1, PC2, colour = age_bin)) +
 
 ```
 
-
+# Shrinkage
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-coefficients <- resultsNames(dds)
-print(coefficients)
+coeffs<- resultsNames(dds)
+print(coeffs)
 
-ref_age <- "a18_29"
+ref_age  <- "a18_29"
+bins     <- c(ref_age, "a30_39","a40_49","a50_59","a60_69","a70_79")
 sex_main <- "Sex_Male_vs_Female"
 
-age_bins <- c("a30_39","a40_49","a50_59","a60_69","a70_79")
+# build shrunken effects for Sex within each age bin
+res_shr <- setNames(vector("list", length(bins)), bins)
 
-missing_itx <- setdiff(paste0("age_bin", age_bins, ".SexMale"), coefficients)
-length(missing_itx)
+# reference bin = main Sex effect
+res_main_raw <- results(dds, name = "Sex_Male_vs_Female")
+res_shr[[ref_age]] <- lfcShrink(dds, coef = "Sex_Male_vs_Female", type = "ashr")
+res_shr[[ref_age]]$pvalue <- res_main_raw$pvalue; res_shr[[ref_age]]$padj <- res_main_raw$padj
+
 
 # Shrinkage reference bin (a18_29)
 
