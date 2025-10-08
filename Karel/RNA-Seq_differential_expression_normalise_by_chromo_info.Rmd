@@ -51,9 +51,9 @@ CORES=16
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-samples<-readRDS("/mnt/vol1/Projects_assist/counts_data.rds")
+samples<-readRDS("/mnt/vol1/Projects_assist/Karel/counts_data.rds")
 
-pheno<-readRDS("/mnt/vol1/Projects_assist/colData.rds")
+pheno<-readRDS("/mnt/vol1/Projects_assist/Karel/colData.rds")
 pheno$ex_code <- rownames(pheno)
 
 stopifnot(all(colnames(samples) %in% pheno$ex_code))
@@ -124,6 +124,8 @@ plotDispEsts(dds)
 
 #  Model diagnostics
 
+A variance-stabilising transform (vst, blind = TRUE) was applied to counts for unsupervised QC. PCA was computed on the most variable genes (plotPCA(..., returnData = TRUE)), and the percentage variance was used for axis labels. Samples were then visualised as: Sex × Batch (colour = Sex, shape = Seq_Batch), Sex × age_bin (colour = Sex:age_bin), age_bin × Batch (colour = age_bin, shape = Seq_Batch), plus single-factor views for Sex and age_bin. These plots were used to verify batch mixing and the consistency of sex/age patterns across batches. Differential expression was fitted on raw counts with the full design.
+
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
@@ -131,10 +133,47 @@ plotDispEsts(dds)
 # Sample-wise QC with VST 
 vsd <- vst(dds, blind = TRUE)
 
+pdat <- DESeq2::plotPCA(vsd, intgroup = c("Sex", "age_bin", "Seq_Batch"), returnData = TRUE)
+pv <- round(100 * attr(pdat, "percentVar")) 
+
 # PCA
-plotPCA(vsd, intgroup = c("Sex","age_bin","Seq_Batch"))
-plotPCA(vsd, intgroup = c("Sex", "age_bin"))
-plotPCA(vsd, intgroup = c("age_bin","Seq_Batch"))
+
+# Sex + Seq_Batch
+ggplot(pdat, aes(PC1, PC2, colour = Sex, shape = Seq_Batch)) +
+  geom_point(size = 2) +
+  labs(x = paste0("PC1: ", pv[1], "% variance"),
+       y = paste0("PC2: ", pv[2], "% variance"),
+       title = "PCA: Sex (colour), Batch (shape)")
+
+#Sex + age_bin (combine into one colour)
+pdat$Sex_age <- interaction(pdat$Sex, pdat$age_bin, sep = ":")
+ggplot(pdat, aes(PC1, PC2, colour = Sex_age)) +
+  geom_point(size = 2) +
+  labs(x = paste0("PC1: ", pv[1], "% variance"),
+       y = paste0("PC2: ", pv[2], "% variance"),
+       title = "PCA: Sex:age_bin (colour)")
+
+#age_bin + Seq_Batch
+ggplot(pdat, aes(PC1, PC2, colour = age_bin, shape = Seq_Batch)) +
+  geom_point(size = 2) +
+  labs(x = paste0("PC1: ", pv[1], "% variance"),
+       y = paste0("PC2: ", pv[2], "% variance"),
+       title = "PCA: age_bin (colour), Batch (shape)")
+
+#Sex only
+ggplot(pdat, aes(PC1, PC2, colour = Sex)) +
+  geom_point(size = 2) +
+  labs(x = paste0("PC1: ", pv[1], "% variance"),
+       y = paste0("PC2: ", pv[2], "% variance"),
+       title = "PCA: Sex")
+
+#age_bin only
+ggplot(pdat, aes(PC1, PC2, colour = age_bin)) +
+  geom_point(size = 2) +
+  labs(x = paste0("PC1: ", pv[1], "% variance"),
+       y = paste0("PC2: ", pv[2], "% variance"),
+       title = "PCA: age_bin")
+
 
 ```
 
@@ -276,7 +315,7 @@ ggplot(rates_arm, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
 ############### Chromosome enrichment (observed vs expected)############
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/<distro>/latest"))
+
 
 # All genes we need positions for (tested across any contrast)
 universes <- lapply(results_list, function(res){
