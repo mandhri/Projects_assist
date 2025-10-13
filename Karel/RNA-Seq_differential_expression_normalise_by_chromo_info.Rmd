@@ -197,25 +197,45 @@ ggplot(pdat, aes(PC1, PC2, colour = age_bin)) +
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-coeffs<- resultsNames(dds)
-print(coeffs)
-
+coeffs   <- resultsNames(dds)
 ref_age  <- "a18_29"
 bins     <- c(ref_age, "a30_39","a40_49","a50_59","a60_69","a70_79")
 sex_main <- "Sex_Male_vs_Female"
 
+# Guardrails
+stopifnot(sex_main %in% coeffs)
+need <- setNames(paste0("age_bin", bins[-1], ".SexMale"), bins[-1])
+miss <- setdiff(unname(need), coeffs)
+if (length(miss)) stop("Missing interaction terms: ", paste(miss, collapse = ", "))
+
+
 # build shrunken effects for Sex within each age bin
 res_shr <- setNames(vector("list", length(bins)), bins)
 
-# reference bin = main Sex effect
-res_main_raw <- results(dds, name = "Sex_Male_vs_Female")
-res_shr[[ref_age]] <- lfcShrink(dds, coef = "Sex_Male_vs_Female", type = "ashr")
-res_shr[[ref_age]]$pvalue <- res_main_raw$pvalue; res_shr[[ref_age]]$padj <- res_main_raw$padj
+# Reference age: main Sex effect
+res_raw_ref <- results(dds, name = sex_main)
+res_shr[[ref_age]] <- lfcShrink(dds, coef = sex_main, type = "ashr")
+res_shr[[ref_age]]$pvalue <- res_raw_ref$pvalue
+res_shr[[ref_age]]$padj   <- res_raw_ref$padj
 
+# Other ages: main + interaction contrast
+for (age in bins[-1]) {
+  itx <- need[[age]]
+  r_raw <- results(dds, contrast = list(c(sex_main, itx)))
+  r_shr <- lfcShrink(dds, contrast = list(c(sex_main, itx)), type = "ashr")
+  r_shr$pvalue <- r_raw$pvalue
+  r_shr$padj   <- r_raw$padj
+  res_shr[[age]] <- r_shr
+}
 
-# filter AFTER shrinkage
+# Filter after shrinkage
 lfc_cut <- 1
-res_sig <- lapply(res_shr, \(x) subset(as.data.frame(x), !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > lfc_cut))
+res_sig <- lapply(names(res_shr), function(nm) {
+  df <- as.data.frame(res_shr[[nm]])
+  df$contrast <- nm
+  subset(df, !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > lfc_cut)
+})
+names(res_sig) <- names(res_shr)
 
 
 ```
