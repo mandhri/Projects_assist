@@ -195,48 +195,50 @@ ggplot(pdat, aes(PC1, PC2, colour = age_bin)) +
 
 # Shrinkage
 
+For each age bin, the sex effect was defined as the main Sex coefficient at the reference age plus the age×Sex interaction. Log fold changes were shrunk with ashr for all bins to stabilise effect sizes, while Wald p-values and FDR from the unshrunken results were used.
+
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 coeffs   <- resultsNames(dds)
+print(coeffs)
 ref_age  <- "a18_29"
 bins     <- c(ref_age, "a30_39","a40_49","a50_59","a60_69","a70_79")
 sex_main <- "Sex_Male_vs_Female"
 
-# Guardrails
-stopifnot(sex_main %in% coeffs)
-need <- setNames(paste0("age_bin", bins[-1], ".SexMale"), bins[-1])
-miss <- setdiff(unname(need), coeffs)
-if (length(miss)) stop("Missing interaction terms: ", paste(miss, collapse = ", "))
 
+# Collect shrunken results for each age bin
+res_all <- NULL
 
-# build shrunken effects for Sex within each age bin
-res_shr <- setNames(vector("list", length(bins)), bins)
+for (age in bins) {
+  if (age == ref_age) {
+    raw_res <- results(dds, name = sex_main)
+    shr_res <- lfcShrink(dds, coef = sex_main, type = "ashr")
+  } else {
+    term    <- paste0("age_bin", age, ".SexMale")
+    raw_res <- results(dds, contrast = list(c(sex_main, term)))
+    shr_res <- lfcShrink(dds, contrast = list(c(sex_main, term)), type = "ashr")
+  }
 
-# Reference age: main Sex effect
-res_raw_ref <- results(dds, name = sex_main)
-res_shr[[ref_age]] <- lfcShrink(dds, coef = sex_main, type = "ashr")
-res_shr[[ref_age]]$pvalue <- res_raw_ref$pvalue
-res_shr[[ref_age]]$padj   <- res_raw_ref$padj
+  df <- data.frame(
+    gene           = rownames(shr_res),
+    log2FoldChange = shr_res$log2FoldChange,   # shrunken LFC
+    lfcSE          = shr_res$lfcSE,
+    stat           = raw_res$stat,             # Wald statistic from unshrunken fit
+    pvalue         = raw_res$pvalue,           # Wald p-value
+    FDR            = raw_res$padj,             # FDR
+    contrast       = age,
+    stringsAsFactors = FALSE
+  )
 
-# Other ages: main + interaction contrast
-for (age in bins[-1]) {
-  itx <- need[[age]]
-  r_raw <- results(dds, contrast = list(c(sex_main, itx)))
-  r_shr <- lfcShrink(dds, contrast = list(c(sex_main, itx)), type = "ashr")
-  r_shr$pvalue <- r_raw$pvalue
-  r_shr$padj   <- r_raw$padj
-  res_shr[[age]] <- r_shr
+  res_all <- rbind(res_all, df)
 }
+
 
 # Filter after shrinkage
 lfc_cut <- 1
-res_sig <- lapply(names(res_shr), function(nm) {
-  df <- as.data.frame(res_shr[[nm]])
-  df$contrast <- nm
-  subset(df, !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > lfc_cut)
-})
-names(res_sig) <- names(res_shr)
-
+res_sig <- res_all[!is.na(res_all$FDR) &
+                   res_all$FDR < 0.05 &
+                   abs(res_all$log2FoldChange) > lfc_cut, ]
 
 ```
 
