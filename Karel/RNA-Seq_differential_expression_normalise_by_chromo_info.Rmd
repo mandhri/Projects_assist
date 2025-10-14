@@ -205,58 +205,9 @@ ref_age  <- "a18_29"
 bins     <- c(ref_age, "a30_39","a40_49","a50_59","a60_69","a70_79")
 sex_main <- "Sex_Male_vs_Female"
 
-
-# Collect shrunken results for each age bin
-res_all <- NULL
-
-for (age in bins) {
-  if (age == ref_age) {
-    raw_res <- results(dds, name = sex_main)
-    shr_res <- lfcShrink(dds, coef = sex_main, type = "ashr")
-  } else {
-    term    <- paste0("age_bin", age, ".SexMale")
-    raw_res <- results(dds, contrast = list(c(sex_main, term)))
-    shr_res <- lfcShrink(dds, contrast = list(c(sex_main, term)), type = "ashr")
-  }
-
-  df <- data.frame(
-    gene           = rownames(shr_res),
-    log2FoldChange = shr_res$log2FoldChange,   # shrunken LFC
-    lfcSE          = shr_res$lfcSE,
-    stat           = raw_res$stat,             # Wald statistic from unshrunken fit
-    pvalue         = raw_res$pvalue,           # Wald p-value
-    FDR            = raw_res$padj,             # FDR
-    contrast       = age,
-    stringsAsFactors = FALSE
-  )
-
-  res_all <- rbind(res_all, df)
-}
-
-res_all2 <- res_all %>%
-  mutate(
-    sig  = !is.na(FDR) & FDR <= 0.05,
-    big  = abs(log2FoldChange) >= 0.5,
-    hit  = sig & big
-  )
-
-ggplot(res_all2, aes(log2FoldChange, -log10(FDR), colour = hit)) +
-  geom_point(alpha = 0.7, size = 1.6) +
-  geom_vline(xintercept = c(-0.5, 0.5), linetype = 2) +
-  geom_hline(yintercept = -log10(0.05), linetype = 2) +
-  facet_wrap(~ contrast) +    
-  scale_colour_manual(values = c("FALSE"="red","TRUE"="blue")) +
-  labs(x="Shrunken log2 fold change", y="-log10(FDR)",
-       title="Male vs Female within each age bin") +
-  theme(legend.position="none")
-
-##
-
-
 # Compare raw vs shrunken LFCs per age bin
 
-res_all_ba <- NULL  # before/after
-
+res_all_ba <- NULL
 for (age in bins) {
   if (age == ref_age) {
     raw_res <- results(dds, name = sex_main)
@@ -269,12 +220,12 @@ for (age in bins) {
 
   df <- data.frame(
     gene            = rownames(raw_res),
-    lfc_raw         = raw_res$log2FoldChange,   # BEFORE shrinkage
-    lfc_shr         = shr_res$log2FoldChange,   # AFTER shrinkage
+    lfc_raw         = raw_res$log2FoldChange,   # before shrinkage
+    lfc_shr         = shr_res$log2FoldChange,   # after shrinkage
     lfcSE_raw       = raw_res$lfcSE,
     stat_raw        = raw_res$stat,
     pvalue_raw      = raw_res$pvalue,
-    FDR_raw         = raw_res$padj,             # keep inference from unshrunken fit
+    FDR_raw         = raw_res$padj,            
     contrast        = age,
     stringsAsFactors = FALSE
   )
@@ -283,8 +234,54 @@ for (age in bins) {
 }
 
 
+res_long <- res_all_ba %>%
+  mutate(
+    hit_raw = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_raw) >= 0.5,
+    hit_shr = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_shr) >= 0.5
+  ) %>%
+  select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, hit_raw, hit_shr) %>%
+  tidyr::pivot_longer(
+    cols = c(lfc_raw, lfc_shr, hit_raw, hit_shr),
+    names_to = c(".value","lfc_type"),
+    names_pattern = "(lfc|hit)_(raw|shr)"
+  ) %>%
+  mutate(
+    lfc_type = dplyr::recode(lfc_type,
+      raw = "Raw LFC (before)",
+      shr = "Shrunken LFC (after)"
+    ),
+    contrast = factor(contrast, levels = c("a18_29","a30_39","a40_49","a50_59","a60_69","a70_79")),
+    lfc_type = factor(lfc_type, levels = c("Raw LFC (before)", "Shrunken LFC (after)"))
+  )
 
+x_lim <- c(-3, 3) 
+y_max <- quantile(-log10(res_long$FDR_raw), 0.995, na.rm = TRUE)
+y_lim <- c(0, max(5, y_max))
 
+p_volcano <- ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
+  geom_point(alpha = 0.6, size = 1.2) +
+  geom_vline(xintercept = c(-0.5, 0.5), linetype = 2) +
+  geom_hline(yintercept = -log10(0.05), linetype = 2) +
+  coord_cartesian(xlim = x_lim, ylim = y_lim) +
+  facet_grid(contrast ~ lfc_type, switch = "y") +  
+  scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "steelblue4")) +
+  labs(
+    title = "Volcano: Raw (left) vs Shrunken (right)",
+    x = "log2 fold change",
+    y = expression(-log[10]("FDR from unshrunken fit")),
+    colour = "FDR≤0.05 & |LFC|≥0.5"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    strip.text.x = element_text(face = "bold"),
+    strip.text.y.left = element_text(angle = 0, face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+p_volcano
 
 
 ```
