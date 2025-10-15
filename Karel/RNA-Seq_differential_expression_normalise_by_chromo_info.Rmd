@@ -350,7 +350,7 @@ print(summary_tbl)
 
 # Distribution of chromosomes in each age band
 
-```{r fig.width=15, fig.height=12, message=FALSE, warning=FALSE, echo=TRUE}
+```{r fig.width=16, fig.height=5, message=FALSE, warning=FALSE, echo=TRUE}
 
 
 sig_ids <- unique(sub("\\..*$","",
@@ -441,27 +441,124 @@ for (age in names(results_sig_fc_raw)) {
   #print(g)
 }
 
-library(patchwork)
+ages <- intersect(names(pies_raw), names(pies_shr))
+ages <- ages[match(ages, names(pies_raw), nomatch = 0)]
 
+# build rows (no per-row legend; we'll collect once at the end)
+top_row <- wrap_plots(lapply(ages, function(a) pies_raw[[a]] + ggtitle(a)), nrow = 1)
+bottom_row <- wrap_plots(lapply(ages, function(a) pies_shr[[a]] + ggtitle(a)), nrow = 1)
 
-ages <- intersect(names(pies_shr), names(pies_raw))
-
-# Interleave shrunken/raw per age, then wrap into a 2-col panel
-plots <- unlist(lapply(ages, function(a) {
-  list(
-    pies_shr[[a]] + ggtitle(paste(a, "• Shrunken LFC")),
-    pies_raw[[a]] + ggtitle(paste(a, "• Unshrunken LFC"))
+# stack rows, collect a single legend, and add clear row headers
+panel <-
+  (top_row / bottom_row) +
+  plot_layout(guides = "collect", heights = c(1, 1)) &
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold")
   )
-}), recursive = FALSE)
 
-panel <- wrap_plots(plots, ncol = 2, guides = "collect") &
-  theme(legend.position = "bottom")
+# add explicit row titles so it's obvious which is which
+panel <- panel +
+  plot_annotation(
+    title    = "Chromosome distribution by age bins",
+    subtitle = "Top row: Unshrunken LFC    •    Bottom row: Shrunken LFC"
+  )
+
 panel
+
+
+```
+```{r fig.width=20, fig.height=8, message=FALSE, warning=FALSE, echo=TRUE}
+
+label_min_pct <- 3    
+base_size_pt  <- 16
+label_size_pt <- 5
+
+
+
+
+make_pie_df <- function(res_list, type_label){
+  out <- lapply(names(res_list), function(age){
+    df <- res_list[[age]]
+    if (is.null(df) || nrow(df)==0) return(NULL)
+    ids <- sub("\\..*$","", rownames(df))
+    chr <- chrom_map[ids]
+    cls <- ifelse(chr %in% as.character(1:22), "Autosome",
+                  ifelse(chr %in% c("X","Y","MT"), chr, "Other"))
+    pie <- as.data.frame(prop.table(table(factor(cls, levels = classes))) * 100)
+    names(pie) <- c("chrom","prop")
+    pie$Age  <- age
+    pie$Type <- type_label
+    pie
+  })
+  dplyr::bind_rows(out)
+}
+
+df_raw <- make_pie_df(results_sig_fc_raw, "Unshrunken")
+df_shr <- make_pie_df(results_sig_fc,      "Shrunken")
+
+# keep the raw order of ages on both rows
+ages <- intersect(unique(df_raw$Age), unique(df_shr$Age))
+df <- bind_rows(df_raw, df_shr) %>%
+  mutate(
+    Age  = factor(Age, levels = ages),
+    Type = factor(Type, levels = c("Unshrunken","Shrunken")),
+    lab  = ifelse(is.na(prop) | prop < label_min_pct, "", sprintf("%.1f%%", prop))
+  )
+
+p <- ggplot(df, aes(x="", y=prop, fill=chrom)) +
+  geom_bar(stat="identity", width=1, colour="white") +
+  coord_polar("y") +
+  geom_text(aes(label = lab), position = position_stack(0.5),
+            size = label_size_pt, na.rm = TRUE) +
+  scale_fill_manual(values = pal, drop = FALSE, name = "Chromosome") +
+  facet_grid(Type ~ Age, switch = "y") +
+  theme_void(base_size = base_size_pt) +
+  theme(
+    strip.text.x = element_text(face = "bold", size = base_size_pt + 2),
+    strip.text.y = element_text(face = "bold"),
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold", size = base_size_pt + 4),
+    plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = "Chromosome distribution by age bins"
+  )
+
+p
 
 ```
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+# Ensembl ID
+sig_ids <- unique(sub("\\..*$","",
+  c(unlist(lapply(results_sig_fc,      rownames), use.names = FALSE),
+    unlist(lapply(results_sig_fc_raw, rownames), use.names = FALSE))
+))
+
+# Map chromosome (GRCh38)
+ens <- useEnsembl("genes", dataset = "hsapiens_gene_ensembl")
+map_df <- getBM(
+  attributes = c("ensembl_gene_id", "chromosome_name"),
+  filters    = "ensembl_gene_id",
+  values     = sig_ids,
+  mart       = ens
+)
+map_df$chromosome_name <- dplyr::case_when(
+  map_df$chromosome_name %in% as.character(1:22) ~ map_df$chromosome_name,
+  map_df$chromosome_name %in% c("X","Y","MT","M") ~ ifelse(map_df$chromosome_name=="M","MT", map_df$chromosome_name),
+  TRUE ~ NA_character_
+)
+chrom_map <- setNames(map_df$chromosome_name, map_df$ensembl_gene_id)
+
+classes <- c("Autosome","X","Y","MT","Other")
+pal     <- setNames(RColorBrewer::brewer.pal(5, "Set2"), classes)
+###################################################
+
+
 
 # After you build `rates_arm`
 arm_levels <- as.vector(sapply(c(1:22, "X", "Y"), function(k) paste0(k, c("p","q"))))
@@ -602,16 +699,11 @@ ggplot(rates_arm, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-
-
 ```
 
 
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
-
-```
 
 
 ```{r fig.width=11, fig.height=13, message=FALSE, warning=FALSE, echo=TRUE}
