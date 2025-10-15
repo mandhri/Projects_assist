@@ -39,7 +39,10 @@ library("RColorBrewer")
 library("e1071")
 library("plotly") 
 library("pheatmap")
-
+library("rtracklayer")
+library("biomaRt")  
+library("GenomeInfoDb")  
+  
 })
 
 CORES=16
@@ -91,9 +94,7 @@ dds  <- dds_org[keep, ]
 
 dds   <- estimateSizeFactors(dds)
 norm_counts <- counts(dds, normalized = TRUE)
-
-head(norm_counts)
-
+glimpse(norm_counts)
 
 ```
 
@@ -195,6 +196,10 @@ ggplot(pdat, aes(PC1, PC2, colour = age_bin)) +
 
 # Shrinkage
 
+Note: 
+Raw LFCs can be noisy, especially for low counts. Shrinkage pulls extreme values towards zero, yielding more stable effect sizes and cleaner ranking. Wald p-values and adjusted p remain from the unshrunken fit; shrinkage mainly improves interpretation and any LFC thresholds.
+
+Analysis:
 For each age bin, the sex effect was defined as the main Sex coefficient at the reference age plus the age×Sex interaction. Log fold changes were shrunk with ashr for all bins to stabilise effect sizes, while Wald p-values and FDR from the unshrunken results were used.
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
@@ -286,74 +291,56 @@ p_volcano
 
 ```
 
-# Annotate DEGs with chromosome info
+# Distribution of genes between sexes in each age band
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
-res_long <- res_all_ba %>%
-  mutate(
-    hit_raw = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_raw) >= 0.5,
-    hit_shr = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_shr) >= 0.5
-  ) %>%
-  select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, hit_raw, hit_shr) %>%
-  tidyr::pivot_longer(
-    cols = c(lfc_raw, lfc_shr, hit_raw, hit_shr),
-    names_to = c(".value","lfc_type"),
-    names_pattern = "(lfc|hit)_(raw|shr)"
-  ) %>%
-  mutate(
-    lfc_type = dplyr::recode(lfc_type,
-      raw = "Raw LFC (before)",
-      shr = "Shrunken LFC (after)"
-    ),
-    contrast = factor(contrast, levels = c("a18_29","a30_39","a40_49","a50_59","a60_69","a70_79")),
-    lfc_type = factor(lfc_type, levels = c("Raw LFC (before)", "Shrunken LFC (after)"))
+results_list <- split(res_all_ba, res_all_ba$contrast)
+results_list <- lapply(results_list, function(df) {
+  out <- df
+  out$log2FoldChange <- df$lfc_raw     # raw LFC 
+  out$lfc_shr         <- df$lfc_shr    # shrunken LFC
+  out$padj            <- df$FDR_raw    # unshrunken FDR
+  rownames(out) <- df$gene
+  out
+})
+
+#FDR on unshrunken stats + |LFC| on shrunken
+FDR_thr <- 0.05
+lfc_thr  <- 1
+
+results_sig_fc <- lapply(results_list, function(df) {
+  keep <- !is.na(df$padj) & df$padj < FDR_thr & abs(df$lfc_shr) >= lfc_thr
+  df[keep, , drop = FALSE]
+})
+
+# Effect direction (Higher in males/ females)
+summary_list <- lapply(names(results_list), function(contrast_name) {
+  res_df <- as.data.frame(results_list[[contrast_name]])
+  tested <- sum(!is.na(res_df$padj))
+
+  sig_df <- results_sig_fc[[contrast_name]]
+  if (is.null(sig_df)) sig_df <- res_df[0, , drop = FALSE]
+
+  data.frame(
+    contrast             = contrast_name,
+    tested_genes         = tested,
+    sig_total            = nrow(sig_df),
+    sig_higher_in_male   = sum(sig_df$lfc_shr > 0, na.rm = TRUE),   #shrunken
+    sig_higher_in_female = sum(sig_df$lfc_shr < 0, na.rm = TRUE)    #shrunken
   )
-
-x_lim <- c(-3, 3) 
-y_max <- quantile(-log10(res_long$FDR_raw), 0.995, na.rm = TRUE)
-y_lim <- c(0, max(5, y_max))
-
-p_volcano <- ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
-  geom_point(alpha = 0.6, size = 1.2) +
-  geom_vline(xintercept = c(-0.5, 0.5), linetype = 2) +
-  geom_hline(yintercept = -log10(0.05), linetype = 2) +
-  coord_cartesian(xlim = x_lim, ylim = y_lim) +
-  facet_grid(contrast ~ lfc_type, switch = "y") +  
-  scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "steelblue4")) +
-  labs(
-    title = "Volcano: Raw (left) vs Shrunken (right)",
-    x = "log2 fold change",
-    y = expression(-log[10]("FDR from unshrunken fit")),
-    colour = "FDR≤0.05 & |LFC|≥0.5"
-  ) +
-  theme_minimal(base_size = 11) +
-  theme(
-    legend.position = "bottom",
-    strip.placement = "outside",
-    strip.background = element_blank(),
-    strip.text.x = element_text(face = "bold"),
-    strip.text.y.left = element_text(angle = 0, face = "bold"),
-    panel.grid.minor = element_blank()
-  )
-
-p_volcano
-
+})
+summary_tbl <- do.call(rbind, summary_list)
+print(summary_tbl)
 
 
 ```
 
 
-# Annotate DEGs with chromosome info
+# Distribution of chromosomes in each age band
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-
-
-
-
 
 sig_ids <- unique(sub("\\..*$","", unlist(lapply(results_sig_fc, rownames), use.names = FALSE)))
 
@@ -390,6 +377,9 @@ for (age in names(results_sig_fc)) {
      print(g)
 
 }
+
+
+
 
 ```
 
@@ -447,7 +437,7 @@ gene_pos <- getBM(
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-suppressPackageStartupMessages({ library(rtracklayer); library(GenomeInfoDb); library(dplyr); library(tidyr) })
+
 
 # UCSC cytoBand (hg38)
 session <- browserSession("UCSC"); genome(session) <- "hg38"
@@ -506,7 +496,6 @@ deg_dir <- do.call(rbind, lapply(names(results_sig_fc), function(cn){
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-suppressPackageStartupMessages({ library(ggplot2); library(dplyr) })
 deg_dir <- dplyr::bind_rows(deg_dir)
 
 # Count DEGs per arm & direction per contrast
@@ -550,6 +539,64 @@ ggplot(rates_arm, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
+## A) Build TWO DEG sets per bin under the same padj rule
+padj_thr <- 0.05
+lfc_thr  <- 1  # match Karel's magnitude cut
+
+# 1) Karel-style: threshold on RAW LFC
+deg_karel <- lapply(results_list, function(df) {
+  keep <- !is.na(df$padj) & df$padj < padj_thr & abs(df$log2FoldChange) > lfc_thr
+  tibble(gene = rownames(df)[keep])
+})
+
+# 2) Your style: threshold on SHRUNKEN LFC
+deg_shrunk <- lapply(results_list, function(df) {
+  keep <- !is.na(df$padj) & df$padj < padj_thr & abs(df$lfc_shr) > lfc_thr
+  tibble(gene = rownames(df)[keep])
+})
+
+## B) Use ONE mapping method consistently (pick biomaRt here)
+library(biomaRt)
+ens <- useEnsembl("genes", dataset = "hsapiens_gene_ensembl")
+all_ids <- unique(sub("\\..*$","", unlist(lapply(results_list, rownames))))
+map_df <- getBM(
+  attributes = c("ensembl_gene_id","chromosome_name"),
+  filters = "ensembl_gene_id",
+  values = all_ids, mart = ens
+) %>%
+  dplyr::mutate(chromosome_name = dplyr::case_when(
+    chromosome_name %in% as.character(1:22) ~ chromosome_name,
+    chromosome_name %in% c("X","Y","MT","M") ~ ifelse(chromosome_name=="M","MT",chromosome_name),
+    TRUE ~ NA_character_
+  )) %>% dplyr::distinct()
+
+map_vec <- setNames(map_df$chromosome_name, map_df$ensembl_gene_id)
+
+## C) Compare pies per bin under the two LFC rules (same mapping)
+cmp_one_bin <- function(bin) {
+  g1 <- sub("\\..*$","", deg_karel[[bin]]$gene)
+  g2 <- sub("\\..*$","", deg_shrunk[[bin]]$gene)
+
+  chr_k <- map_vec[g1]
+  chr_s <- map_vec[g2]
+
+  f <- function(chr) {
+    grp <- ifelse(chr %in% as.character(1:22), "Autosome",
+           ifelse(chr %in% c("X","Y","MT"), chr, "Other"))
+    prop.table(table(factor(grp, levels = c("Autosome","X","Y","MT","Other"))))
+  }
+
+  data.frame(
+    chrom_group = c("Autosome","X","Y","MT","Other"),
+    prop_rawlfc = as.numeric(f(chr_k)),
+    prop_shrlfc = as.numeric(f(chr_s)),
+    bin = bin
+  )
+}
+
+bins <- names(results_list)
+cmp_tbl <- dplyr::bind_rows(lapply(bins, cmp_one_bin))
+print(cmp_tbl)
 
 
 ```
