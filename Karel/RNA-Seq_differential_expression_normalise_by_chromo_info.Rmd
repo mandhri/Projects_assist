@@ -350,6 +350,9 @@ print(summary_tbl)
 
 # Distribution of chromosomes in each age band
 
+Applying shrinkage (ashr) reduced autosomal borderline effects, increasing the relative contribution of genes on X/Y among significant sex differences within multiple age bins
+
+
 ```{r fig.width=16, fig.height=5, message=FALSE, warning=FALSE, echo=TRUE}
 
 
@@ -505,7 +508,190 @@ p <- ggplot(df, aes(x="", y=prop, fill=chrom)) +
 p
 
 ```
+# Per-chromosome normalised
 
+For each age bin, significant vs tested within the same chromosome is compared for normalisation.
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+INCLUDE_OTHER <- FALSE
+classes <- if (INCLUDE_OTHER) c("Autosome","X","Y","MT","Other") else c("Autosome","X","Y","MT")
+
+classify_chr <- function(chr){
+  out <- ifelse(chr %in% as.character(1:22), "Autosome",
+         ifelse(chr %in% c("X","Y","MT"), chr, "Other"))
+  if (!INCLUDE_OTHER) out[!(out %in% classes)] <- NA_character_
+  out
+}
+
+age_levels <- c("a18_29","a30_39","a40_49","a50_59","a60_69","a70_79")
+
+# Build "tested" background per age × chromosome (from your results_list)
+tested_df <- map_dfr(names(results_list), function(age){
+  df  <- results_list[[age]]
+  ids <- sub("\\..*$","", rownames(df))
+  chr <- classify_chr(chrom_map[ids])
+  tibble(Age = age, chrom = chr, tested = !is.na(df$padj))
+}) %>%
+  filter(tested, !is.na(chrom)) %>%
+  count(Age, chrom, name = "tested_n") %>%
+  mutate(Age = factor(Age, levels = age_levels),
+         chrom = factor(chrom, levels = classes)) %>%
+  complete(Age, chrom, fill = list(tested_n = 0L))
+
+tested_df
+
+```
+
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+normalise_sig_rates <- function(sig_list, label){
+  # counts of significant genes per age × chromosome
+  sig_counts <- map_dfr(names(sig_list), function(age){
+    sig_df <- sig_list[[age]]
+    sig_ids <- if (!is.null(sig_df) && nrow(sig_df) > 0)
+      sub("\\..*$","", rownames(sig_df)) else character(0)
+    chr <- classify_chr(chrom_map[sig_ids])
+    tibble(Age = age, chrom = chr) %>%
+      filter(!is.na(chrom)) %>%
+      count(Age, chrom, name = "sig_n")
+  }) %>%
+    mutate(Age = factor(Age, levels = age_levels),
+           chrom = factor(chrom, levels = classes)) %>%
+    complete(Age, chrom, fill = list(sig_n = 0L))  # full grid, zero-filled
+
+  # join background and compute rates
+  out <- tested_df %>%
+    left_join(sig_counts, by = c("Age","chrom")) %>%
+    mutate(sig_n = replace_na(sig_n, 0L),
+           rate  = if_else(tested_n > 0, sig_n / tested_n, NA_real_)) %>%
+    group_by(Age) %>%
+    mutate(rate_pct = 100 * rate / sum(rate, na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(Type = label)
+
+  # add totals for convenience
+  totals <- out %>%
+    group_by(Age) %>%
+    summarise(Type    = first(Type),
+              n_tested = sum(tested_n, na.rm = TRUE),
+              n_sig    = sum(sig_n,    na.rm = TRUE),
+              .groups = "drop")
+
+  list(rates = out, totals = totals)
+}
+
+RAW  <- normalise_sig_rates(results_sig_fc_raw, "Unshrunken")
+SHRN <- normalise_sig_rates(results_sig_fc,      "Shrunken")
+
+norm_raw  <- RAW$rates   # columns: Age, chrom, tested_n, sig_n, rate, rate_pct, Type
+tot_raw   <- RAW$totals  # columns: Age, Type, n_tested, n_sig
+norm_shr  <- SHRN$rates
+tot_shr   <- SHRN$totals
+
+# Ensure we actually have non-empty ages (avoids your earlier faceting error)
+norm_raw  %>% group_by(Age) %>% summarise(any_rate = any(!is.na(rate) & rate > 0)) 
+norm_shr  %>% group_by(Age) %>% summarise(any_rate = any(!is.na(rate) & rate > 0))
+
+# Peek at the percentages you’ll use for pies
+norm_raw  %>% select(Age, chrom, rate_pct)  %>% arrange(Age, chrom) %>% head(20)
+norm_shr  %>% select(Age, chrom, rate_pct)  %>% arrange(Age, chrom) %>% head(20)
+
+
+```
+
+
+```{r fig.width=18, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+
+library(ggplot2)
+library(dplyr)
+
+# Draw a panel of normalised pies for one data frame (raw OR shrunken)
+plot_pies <- function(df_rates, df_totals, title_text,
+                      classes = c("Autosome","X","Y","MT"),
+                      pal,                      # named palette, e.g. Set2
+                      label_min_pct = 3,
+                      base_size_pt  = 16,
+                      label_size_pt = 5,
+                      ncol_facets   = 3) {
+
+  # Facet order from totals
+  age_levels <- as.character(df_totals$Age)
+
+  # ensure factors + safe labels
+  df_rates <- df_rates %>%
+    mutate(
+      Age     = factor(Age,  levels = age_levels),
+      chrom   = factor(chrom, levels = classes),
+      rate    = ifelse(is.na(rate), 0, rate)  # guard against NA
+    ) %>%
+    group_by(Age) %>%
+    mutate(
+      rate_pct = 100 * rate / sum(rate, na.rm = TRUE),
+      lab      = ifelse(is.na(rate_pct) | rate_pct < label_min_pct, "",
+                        sprintf("%.1f%%", rate_pct))
+    ) %>%
+    ungroup()
+
+  # facet strip labels with n_sig / n_tested
+  df_totals <- df_totals %>% mutate(Age = factor(Age, levels = age_levels))
+  lab_map <- setNames(
+    paste0(as.character(df_totals$Age),
+           "\n(n_sig=", format(df_totals$n_sig, big.mark = ","),
+           ", tested=", format(df_totals$n_tested, big.mark = ","), ")"),
+    as.character(df_totals$Age)
+  )
+
+  ggplot(df_rates, aes(x = "", y = rate_pct, fill = chrom)) +
+    geom_bar(stat = "identity", width = 1, colour = "white") +
+    coord_polar("y") +
+    geom_text(aes(label = lab),
+              position = position_stack(0.5), size = label_size_pt, na.rm = TRUE) +
+    scale_fill_manual(values = pal, drop = FALSE, name = "Chromosome") +
+    facet_wrap(~ Age, ncol = ncol_facets, labeller = labeller(Age = lab_map)) +
+    theme_void(base_size = base_size_pt) +
+    theme(
+      strip.text = element_text(face = "bold", size = base_size_pt + 2),
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size_pt + 4),
+      panel.spacing.y = grid::unit(18, "pt")   # extra vertical breathing room
+    ) +
+    labs(title = title_text)
+}
+
+# ---- Make the two separate panels ----
+p_norm_raw <- plot_pies(
+  df_rates   = norm_raw,
+  df_totals  = tot_raw,
+  title_text = "Chromosome *hit-rate* distribution by age bin (normalised) — Unshrunken",
+  classes    = classes,
+  pal        = pal,
+  ncol_facets = 3
+)
+
+p_norm_shr <- plot_pies(
+  df_rates   = norm_shr,
+  df_totals  = tot_shr,
+  title_text = "Chromosome *hit-rate* distribution by age bin (normalised) — Shrunken",
+  classes    = classes,
+  pal        = pal,
+  ncol_facets = 3
+)
+
+# Show them
+p_norm_raw
+p_norm_shr
+
+# Optional save (adjust sizes to your liking)
+# ggsave("pies_unshrunken_normalised.png", p_norm_raw, width = 16, height = 5, dpi = 300)
+# ggsave("pies_shrunken_normalised.png",   p_norm_shr, width = 16, height = 5, dpi = 300)
+
+
+```
 
 
 ############### Chromosome enrichment (observed vs expected)############
@@ -513,113 +699,142 @@ p
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
-# All genes we need positions for (tested across any contrast)
+# All tested Ensembl IDs across bins
 universes <- lapply(results_list, function(res){
   df <- as.data.frame(res)
   sub("\\..*$","", rownames(df))[!is.na(df$padj)]
 })
 map_ids <- unique(unlist(universes))
 
-# Ensembl
+# Ensembl gene positions
 ensembl <- biomaRt::useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
-
 gene_pos <- getBM(
   attributes = c("ensembl_gene_id","chromosome_name","start_position","end_position"),
-  filters    = "ensembl_gene_id",
-  values     = map_ids,
-  mart       = ensembl
+  filters    = "ensembl_gene_id", values = map_ids, mart = ensembl
 ) %>%
   distinct(ensembl_gene_id, .keep_all = TRUE) %>%
-  mutate(mid_bp = (start_position + end_position)/2) %>%
-  filter(chromosome_name %in% c(as.character(1:22),"X","Y"))
+  filter(chromosome_name %in% c(as.character(1:22), "X", "Y")) %>%
+  mutate(mid_bp = 0.5 * (start_position + end_position))
 
-```
-
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-# UCSC cytoBand (hg38)
+# UCSC cytoBand (hg38) → centromeres → arm lengths
 session <- browserSession("UCSC"); genome(session) <- "hg38"
-cyto <- getTable(ucscTableQuery(session, table="cytoBand")) %>%
+cyto <- rtracklayer::getTable(ucscTableQuery(session, table = "cytoBand")) %>%
   mutate(chrom = sub("^chr","", chrom))
-
-# Chromosome lengths
 ci <- GenomeInfoDb::getChromInfoFromUCSC("hg38") %>%
   transmute(chrom = sub("^chr","", chrom), chr_length_bp = size)
+acen <- cyto %>% filter(gieStain == "acen") %>%
+  group_by(chrom) %>% summarise(cent_start = min(chromStart), cent_end = max(chromEnd), .groups="drop")
 
-# Centromere span = rows with gieStain == "acen"
-acen <- cyto %>%
-  filter(gieStain == "acen") %>%
-  group_by(chrom) %>%
-  summarise(cent_start = min(chromStart), cent_end = max(chromEnd), .groups="drop")
-
-# Arm lengths (bp)
 arm_table <- ci %>% inner_join(acen, by = "chrom") %>%
   transmute(chromosome_name = chrom,
-            p_len_bp = cent_start,
-            q_len_bp = chr_length_bp - cent_end)
+            p_len_bp = cent_start, q_len_bp = chr_length_bp - cent_end)
 
-# Long format, add chrom_arm and Mb
 arm_sizes <- arm_table %>%
   pivot_longer(c(p_len_bp, q_len_bp), names_to = "arm", values_to = "len_bp") %>%
   mutate(arm = ifelse(arm == "p_len_bp", "p", "q"),
          chrom_arm = paste0(chromosome_name, arm),
-         len_Mb = len_bp/1e6)
+         len_Mb = len_bp / 1e6)
 
-```
-
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-# Build a tidy data.frame: which DEGs are higher in Male vs Female, per contrast
-deg_dir <- do.call(rbind, lapply(names(results_sig_fc), function(cn){
-  df <- results_sig_fc[[cn]]
-  if (is.null(df) || nrow(df) == 0) return(
-    data.frame(contrast=character(0), ensembl_gene_id=character(0), dir=character(0))
-  )
-  data.frame(
-    contrast        = cn,
-    ensembl_gene_id = sub("\\..*$","", rownames(df)),
-    dir             = ifelse(df$log2FoldChange > 0, "higher_in_Male", "higher_in_Female"),
-    row.names = NULL
-  )
-}))
-
-
-```
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-suppressPackageStartupMessages({ library(ggplot2); library(dplyr) })
-deg_dir <- dplyr::bind_rows(deg_dir)
-
+# Map each gene to its arm
 gene_arm <- gene_pos %>%
   inner_join(arm_table, by = "chromosome_name") %>%
   mutate(arm = ifelse(mid_bp < p_len_bp, "p", "q"),
          chrom_arm = paste0(chromosome_name, arm)) %>%
   select(ensembl_gene_id, chromosome_name, mid_bp, arm, chrom_arm)
 
-# Count DEGs per arm & direction per contrast
-deg_arm <- deg_dir %>%
-  dplyr::inner_join(gene_arm, by = "ensembl_gene_id") %>%
-  dplyr::count(contrast, chrom_arm, dir, name = "deg")
+```
 
-# Merge sizes and compute DEGs per 10 Mb
-rates_arm <- arm_sizes %>%
-  select(chrom_arm, len_Mb) %>%
-  inner_join(deg_arm, by = "chrom_arm") %>%
-  mutate(rate_per_10Mb = deg / pmax(len_Mb/10, 1e-9))
 
-# Plot (DNAm-style)
-ggplot(rates_arm, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+ARM_LEN_FLOOR_MB <- 5    # change to 1 if you prefer no/less floor
+
+arm_rates_from_list <- function(sig_list, type_label = c("Unshrunken","Shrunken")[1]) {
+  # Which LFC column to use for direction?
+  dir_col <- if (identical(type_label, "Shrunken")) "lfc_shr" else "lfc_raw"
+
+  # Build DEG table with direction per contrast
+  deg_dir <- map_dfr(names(sig_list), function(cn){
+    df <- sig_list[[cn]]
+    if (is.null(df) || nrow(df) == 0)
+      return(tibble(contrast = character(0), ensembl_gene_id = character(0), dir = character(0)))
+    tibble(
+      contrast        = cn,
+      ensembl_gene_id = sub("\\..*$","", rownames(df)),
+      dir             = ifelse(df[[dir_col]] > 0, "higher_in_Male", "higher_in_Female")
+    )
+  })
+
+  # Count per arm and direction, then normalise by arm length
+  deg_arm <- deg_dir %>%
+    inner_join(gene_arm, by = "ensembl_gene_id") %>%
+    count(contrast, chrom_arm, dir, name = "deg")
+
+  rates_arm <- arm_sizes %>%
+    select(chrom_arm, len_Mb) %>%
+    inner_join(deg_arm, by = "chrom_arm") %>%
+    mutate(rate_per_10Mb = deg / pmax(len_Mb / 10, ARM_LEN_FLOOR_MB / 10)) %>%
+    mutate(Type = type_label)
+
+  rates_arm
+}
+
+rates_raw <- arm_rates_from_list(results_sig_fc_raw, "Unshrunken")
+rates_shr <- arm_rates_from_list(results_sig_fc,      "Shrunken")
+
+rates_both <- bind_rows(rates_raw, rates_shr)
+
+
+```
+
+
+```{r fig.width=15, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+p_raw <- ggplot(rates_raw, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
   geom_col(position = "dodge") +
-  labs(title = "DEG distribution across chromosome arms",
-       subtitle = "Normalised by arm size (DEGs per 10 Mb)",
-       x = "Chromosome arm", y = "DEGs per 10 Mb", fill = "Direction") +
+  facet_wrap(~ contrast, ncol = 3, scales = "free_y") +
+  scale_fill_manual(values = c("higher_in_Male"="tomato", "higher_in_Female"="royalblue"),
+                    name = "Direction") +
+  labs(title = "DEG distribution across chromosome arms — Unshrunken",
+       subtitle = paste0("Normalised by arm size (DEGs per 10 Mb; floor ", ARM_LEN_FLOOR_MB, " Mb)"),
+       x = "Chromosome arm", y = "DEGs per 10 Mb") +
   theme_minimal(base_size = 12) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) +
-  scale_fill_manual(values = c("higher_in_Male"="tomato", "higher_in_Female"="royalblue")) +
-  facet_wrap(~ contrast, ncol = 2, scales = "free_y")
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+p_shr <- ggplot(rates_shr, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ contrast, ncol = 3, scales = "free_y") +
+  scale_fill_manual(values = c("higher_in_Male"="tomato", "higher_in_Female"="royalblue"),
+                    name = "Direction") +
+  labs(title = "DEG distribution across chromosome arms — Shrunken",
+       subtitle = paste0("Normalised by arm size (DEGs per 10 Mb; floor ", ARM_LEN_FLOOR_MB, " Mb)"),
+       x = "Chromosome arm", y = "DEGs per 10 Mb") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+# (B) Or, one grid with Type on rows
+p_both <- ggplot(rates_both, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
+  geom_col(position = "dodge") +
+  facet_grid(Type ~ contrast, scales = "free_y") +
+  scale_fill_manual(values = c("higher_in_Male"="tomato", "higher_in_Female"="royalblue"),
+                    name = "Direction") +
+  labs(title = "DEG distribution across chromosome arms",
+       subtitle = paste0("Normalised by arm size (DEGs per 10 Mb; floor ", ARM_LEN_FLOOR_MB, " Mb)"),
+       x = "Chromosome arm", y = "DEGs per 10 Mb") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+# Show whichever you prefer:
+p_raw
+p_shr
+
+```
+
+
+
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
 ```
