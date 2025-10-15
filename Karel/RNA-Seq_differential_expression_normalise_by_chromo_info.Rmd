@@ -42,7 +42,9 @@ library("pheatmap")
 library("rtracklayer")
 library("biomaRt")  
 library("GenomeInfoDb")  
-  
+library("cowplot")  
+library("patchwork")
+
 })
 
 CORES=16
@@ -310,12 +312,20 @@ results_list <- lapply(results_list, function(df) {
 FDR_thr <- 0.05
 lfc_thr  <- 1
 
+#Results wiht shrinking
 results_sig_fc <- lapply(results_list, function(df) {
   keep <- !is.na(df$padj) & df$padj < FDR_thr & abs(df$lfc_shr) >= lfc_thr
   df[keep, , drop = FALSE]
 })
 
-# Effect direction (Higher in males/ females)
+
+#Results without shrinking
+results_sig_fc_raw <- lapply(results_list, function(df) {
+  keep <- !is.na(df$padj) & df$padj < FDR_thr & abs(df$lfc_raw) >= lfc_thr
+  df[keep, , drop = FALSE]
+})
+
+# Effect direction (Higher in males/ females) with referencce to shrinking
 summary_list <- lapply(names(results_list), function(contrast_name) {
   res_df <- as.data.frame(results_list[[contrast_name]])
   tested <- sum(!is.na(res_df$padj))
@@ -340,46 +350,113 @@ print(summary_tbl)
 
 # Distribution of chromosomes in each age band
 
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+```{r fig.width=15, fig.height=12, message=FALSE, warning=FALSE, echo=TRUE}
 
-sig_ids <- unique(sub("\\..*$","", unlist(lapply(results_sig_fc, rownames), use.names = FALSE)))
 
-map <- annotables::grch38[, c("ensgene","chr")]
-map$ensgene <- sub("\\..*$","", map$ensgene)
-chrom_map <- setNames(map$chr, map$ensgene)
+sig_ids <- unique(sub("\\..*$","",
+  c(unlist(lapply(results_sig_fc,      rownames), use.names = FALSE),
+    unlist(lapply(results_sig_fc_raw, rownames), use.names = FALSE))
+))
+
+# map chromosome via Ensembl (GRCh38)
+ens <- useEnsembl("genes", dataset = "hsapiens_gene_ensembl")
+map_df <- getBM(
+  attributes = c("ensembl_gene_id", "chromosome_name"),
+  filters    = "ensembl_gene_id",
+  values     = sig_ids,
+  mart       = ens
+)
+
+# normalise chromosome labels.
+map_df$chromosome_name <- dplyr::case_when(
+  map_df$chromosome_name %in% as.character(1:22) ~ map_df$chromosome_name,
+  map_df$chromosome_name %in% c("X","Y","MT","M") ~ ifelse(map_df$chromosome_name=="M","MT", map_df$chromosome_name),
+  TRUE ~ NA_character_
+)
+
+chrom_map <- setNames(map_df$chromosome_name, map_df$ensembl_gene_id)
 
 # Fixed classes & palette
 classes<- c("Autosome","X","Y","MT","Other")
 pal<- setNames(RColorBrewer::brewer.pal(5, "Set2"), classes)
 
+
+#Chromosomal distribution for shrinken logfc
+pies_shr <- list()                               
+title_prefix <- "Chromosome distribution: shrunken LFC"
 for (age in names(results_sig_fc)) {
   df <- results_sig_fc[[age]]
-  if (is.null(df)) next
-  if (nrow(df) == 0) next
+  if (is.null(df) || nrow(df) == 0) next
 
   ids <- sub("\\..*$","", rownames(df))
   chr <- chrom_map[ids]
   cls <- ifelse(chr %in% as.character(1:22), "Autosome",
-         ifelse(chr %in% c("X","Y"), chr,
-         ifelse(chr %in% c("MT","M"), "MT", "Other")))
+         ifelse(chr %in% c("X","Y","MT"), chr, "Other"))
 
   pie <- as.data.frame(prop.table(table(factor(cls, levels = classes))) * 100)
   names(pie) <- c("chrom","prop")
 
-   g <- ggplot(pie, aes("", prop, fill = chrom)) +
+  g <- ggplot(pie, aes("", prop, fill = chrom)) +
     geom_bar(stat = "identity", width = 1, color = "white") +
     coord_polar("y") +
     geom_text(aes(label = sprintf("%.1f%%", prop)),
               position = position_stack(0.5), size = 3) +
     scale_fill_manual(values = pal, drop = FALSE) +
     theme_void() +
-    labs(title = paste("Chromosome distribution —", age), fill = "Chromosome")
-     print(g)
+    labs(title = paste(title_prefix, age), fill = "Chromosome")
+  # print(g)
+    pies_shr[[age]] <- g
 
 }
 
 
 
+
+#Chromosomal distribution for unshrinken logfc
+
+pies_raw <- list() 
+title_prefix <- "Chromosome distribution: Unshrunken LFC"
+for (age in names(results_sig_fc_raw)) {
+  df <- results_sig_fc_raw[[age]]
+  if (is.null(df) || nrow(df) == 0) next
+
+  ids <- sub("\\..*$","", rownames(df))
+  chr <- chrom_map[ids]
+  cls <- ifelse(chr %in% as.character(1:22), "Autosome",
+         ifelse(chr %in% c("X","Y","MT"), chr, "Other"))
+
+  pie <- as.data.frame(prop.table(table(factor(cls, levels = classes))) * 100)
+  names(pie) <- c("chrom","prop")
+
+  g <- ggplot(pie, aes("", prop, fill = chrom)) +
+    geom_bar(stat = "identity", width = 1, color = "white") +
+    coord_polar("y") +
+    geom_text(aes(label = sprintf("%.1f%%", prop)),
+              position = position_stack(0.5), size = 3) +
+    scale_fill_manual(values = pal, drop = FALSE) +
+    theme_void() +
+    labs(title = paste(title_prefix, age), fill = "Chromosome")
+    pies_raw[[age]] <- g
+
+  #print(g)
+}
+
+library(patchwork)
+
+
+ages <- intersect(names(pies_shr), names(pies_raw))
+
+# Interleave shrunken/raw per age, then wrap into a 2-col panel
+plots <- unlist(lapply(ages, function(a) {
+  list(
+    pies_shr[[a]] + ggtitle(paste(a, "• Shrunken LFC")),
+    pies_raw[[a]] + ggtitle(paste(a, "• Unshrunken LFC"))
+  )
+}), recursive = FALSE)
+
+panel <- wrap_plots(plots, ncol = 2, guides = "collect") &
+  theme(legend.position = "bottom")
+panel
 
 ```
 
@@ -537,67 +614,48 @@ ggplot(rates_arm, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
 ```
 
 
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+```{r fig.width=11, fig.height=13, message=FALSE, warning=FALSE, echo=TRUE}
 
-## A) Build TWO DEG sets per bin under the same padj rule
-padj_thr <- 0.05
-lfc_thr  <- 1  # match Karel's magnitude cut
-
-# 1) Karel-style: threshold on RAW LFC
-deg_karel <- lapply(results_list, function(df) {
-  keep <- !is.na(df$padj) & df$padj < padj_thr & abs(df$log2FoldChange) > lfc_thr
-  tibble(gene = rownames(df)[keep])
-})
-
-# 2) Your style: threshold on SHRUNKEN LFC
-deg_shrunk <- lapply(results_list, function(df) {
-  keep <- !is.na(df$padj) & df$padj < padj_thr & abs(df$lfc_shr) > lfc_thr
-  tibble(gene = rownames(df)[keep])
-})
-
-## B) Use ONE mapping method consistently (pick biomaRt here)
-library(biomaRt)
-ens <- useEnsembl("genes", dataset = "hsapiens_gene_ensembl")
-all_ids <- unique(sub("\\..*$","", unlist(lapply(results_list, rownames))))
-map_df <- getBM(
-  attributes = c("ensembl_gene_id","chromosome_name"),
-  filters = "ensembl_gene_id",
-  values = all_ids, mart = ens
-) %>%
-  dplyr::mutate(chromosome_name = dplyr::case_when(
-    chromosome_name %in% as.character(1:22) ~ chromosome_name,
-    chromosome_name %in% c("X","Y","MT","M") ~ ifelse(chromosome_name=="M","MT",chromosome_name),
-    TRUE ~ NA_character_
-  )) %>% dplyr::distinct()
-
-map_vec <- setNames(map_df$chromosome_name, map_df$ensembl_gene_id)
-
-## C) Compare pies per bin under the two LFC rules (same mapping)
-cmp_one_bin <- function(bin) {
-  g1 <- sub("\\..*$","", deg_karel[[bin]]$gene)
-  g2 <- sub("\\..*$","", deg_shrunk[[bin]]$gene)
-
-  chr_k <- map_vec[g1]
-  chr_s <- map_vec[g2]
-
-  f <- function(chr) {
-    grp <- ifelse(chr %in% as.character(1:22), "Autosome",
+pie_loop <- function(deg_list, title_prefix) {
+  plots <- list()
+  for (age in names(deg_list)) {
+    df <- deg_list[[age]]
+    if (is.null(df) || nrow(df) == 0) {
+      plots[[age]] <- ggplot() + theme_void() + ggtitle(paste(title_prefix, age, "(no DEGs)"))
+      next
+    }
+    ids <- sub("\\..*$","", rownames(df))
+    chr <- chrom_map[ids]
+    cls <- ifelse(chr %in% as.character(1:22), "Autosome",
            ifelse(chr %in% c("X","Y","MT"), chr, "Other"))
-    prop.table(table(factor(grp, levels = c("Autosome","X","Y","MT","Other"))))
+    pie <- as.data.frame(prop.table(table(factor(cls, levels = classes))) * 100)
+    names(pie) <- c("chrom","prop")
+    plots[[age]] <- ggplot(pie, aes("", prop, fill = chrom)) +
+      geom_bar(stat = "identity", width = 1, color = "white") +
+      coord_polar("y") +
+      geom_text(aes(label = sprintf("%.1f%%", prop)),
+                position = position_stack(0.5), size = 3) +
+      scale_fill_manual(values = pal, drop = FALSE) +
+      theme_void() +
+      labs(title = paste(title_prefix, age), fill = "Chromosome")
   }
-
-  data.frame(
-    chrom_group = c("Autosome","X","Y","MT","Other"),
-    prop_rawlfc = as.numeric(f(chr_k)),
-    prop_shrlfc = as.numeric(f(chr_s)),
-    bin = bin
-  )
+  plots
 }
 
-bins <- names(results_list)
-cmp_tbl <- dplyr::bind_rows(lapply(bins, cmp_one_bin))
-print(cmp_tbl)
+# Public, pick-one functions
+make_pies_shrunken <- function() pie_loop(results_sig_fc,     "Chromosome distribution: Shrunken LFC")
+make_pies_raw      <- function() pie_loop(results_sig_fc_raw, "Chromosome distribution: Raw LFC")
 
+pies_shr <- make_pies_shrunken()
+pies_raw <- make_pies_raw()
+age_order <- union(names(pies_shr), names(pies_raw))
+panel_rows <- lapply(age_order, function(age) {
+  plot_grid(pies_shr[[age]] %||% (ggplot() + theme_void()),
+            pies_raw[[age]] %||% (ggplot() + theme_void()),
+            ncol = 2, labels = c("Shrunken","Raw"), label_size = 10)
+})
+panel <- plot_grid(plotlist = panel_rows, ncol = 1)
+panel
 
 ```
 
