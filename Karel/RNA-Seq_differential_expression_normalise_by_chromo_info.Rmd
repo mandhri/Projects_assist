@@ -1,6 +1,15 @@
 ---
 title: "RNA-Seq_differential_expression_normalise_by_chromo"
-output: html_document
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+    fig_width: 10
+    fig_height: 8
+  pdf_document:
+    toc: yes
+theme: cosmo
 date: "2025-09-30"
 ---
 
@@ -273,7 +282,7 @@ p_volcano <- ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
   facet_grid(contrast ~ lfc_type, switch = "y") +  
   scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "steelblue4")) +
   labs(
-    title = "Volcano: Raw (left) vs Shrunken (right)",
+    title = "Volcano: Raw vs Shrunken",
     x = "log2 fold change",
     y = expression(-log[10]("FDR from unshrunken fit")),
     colour = "FDR≤0.05 & |LFC|≥0.5"
@@ -295,6 +304,8 @@ p_volcano
 
 # Distribution of genes between sexes in each age band
 
+For each bin, the code records the number tested, total significant genes, and directionality (higher in Male vs Female based on shrunken LFC for the shrunken set).
+
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
@@ -308,7 +319,7 @@ results_list <- lapply(results_list, function(df) {
   out
 })
 
-#FDR on unshrunken stats + |LFC| on shrunken
+#FDR on unshrunken stats + LFC on shrunken
 FDR_thr <- 0.05
 lfc_thr  <- 1
 
@@ -350,7 +361,7 @@ print(summary_tbl)
 
 # Distribution of chromosomes in each age band
 
-Applying shrinkage (ashr) reduced autosomal borderline effects, increasing the relative contribution of genes on X/Y among significant sex differences within multiple age bins
+After shrinkage (ashr), autosomal borderline hits decrease, so the relative share of X/Y increases among significant genes. Percentages are compositional (depend on how many genes pass filters per bin) and are not length- or background-normalised.
 
 
 ```{r fig.width=16, fig.height=5, message=FALSE, warning=FALSE, echo=TRUE}
@@ -411,9 +422,6 @@ for (age in names(results_sig_fc)) {
     pies_shr[[age]] <- g
 
 }
-
-
-
 
 #Chromosomal distribution for unshrinken logfc
 
@@ -508,9 +516,10 @@ p <- ggplot(df, aes(x="", y=prop, fill=chrom)) +
 p
 
 ```
-# Per-chromosome normalised
+# Per-chromosome normalisation
 
-For each age bin, significant vs tested within the same chromosome is compared for normalisation.
+For each age bin, tested genes are mapped to {Autosome, X, Y, MT} and tallied per chromosome to form a background. Significant genes (unshrunken and shrunken sets) are then joined to this background to compute chromosome-specific hit rates (sig/tested) and within-bin percentages.
+
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
@@ -606,28 +615,21 @@ norm_shr  %>% select(Age, chrom, rate_pct)  %>% arrange(Age, chrom) %>% head(20)
 ```{r fig.width=18, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
-
-library(ggplot2)
-library(dplyr)
-
-# Draw a panel of normalised pies for one data frame (raw OR shrunken)
+# Function for creating panel of normalised pies for one df (raw / shrunken)
 plot_pies <- function(df_rates, df_totals, title_text,
                       classes = c("Autosome","X","Y","MT"),
-                      pal,                      # named palette, e.g. Set2
+                      pal,                      # named palettE
                       label_min_pct = 3,
                       base_size_pt  = 16,
                       label_size_pt = 5,
                       ncol_facets   = 3) {
 
-  # Facet order from totals
   age_levels <- as.character(df_totals$Age)
-
-  # ensure factors + safe labels
   df_rates <- df_rates %>%
     mutate(
       Age     = factor(Age,  levels = age_levels),
       chrom   = factor(chrom, levels = classes),
-      rate    = ifelse(is.na(rate), 0, rate)  # guard against NA
+      rate    = ifelse(is.na(rate), 0, rate)
     ) %>%
     group_by(Age) %>%
     mutate(
@@ -658,16 +660,15 @@ plot_pies <- function(df_rates, df_totals, title_text,
       strip.text = element_text(face = "bold", size = base_size_pt + 2),
       legend.position = "bottom",
       plot.title = element_text(hjust = 0.5, face = "bold", size = base_size_pt + 4),
-      panel.spacing.y = grid::unit(18, "pt")   # extra vertical breathing room
-    ) +
+      panel.spacing.y = grid::unit(18, "pt")) +
     labs(title = title_text)
 }
 
-# ---- Make the two separate panels ----
+# Separate panels
 p_norm_raw <- plot_pies(
   df_rates   = norm_raw,
   df_totals  = tot_raw,
-  title_text = "Chromosome *hit-rate* distribution by age bin (normalised) — Unshrunken",
+  title_text = "Chromosome distribution by age bin (normalised): Unshrunken",
   classes    = classes,
   pal        = pal,
   ncol_facets = 3
@@ -676,17 +677,16 @@ p_norm_raw <- plot_pies(
 p_norm_shr <- plot_pies(
   df_rates   = norm_shr,
   df_totals  = tot_shr,
-  title_text = "Chromosome *hit-rate* distribution by age bin (normalised) — Shrunken",
+  title_text = "Chromosome distribution by age bin (normalised): Shrunken",
   classes    = classes,
   pal        = pal,
   ncol_facets = 3
 )
 
-# Show them
 p_norm_raw
 p_norm_shr
 
-# Optional save (adjust sizes to your liking)
+# Optional save
 # ggsave("pies_unshrunken_normalised.png", p_norm_raw, width = 16, height = 5, dpi = 300)
 # ggsave("pies_shrunken_normalised.png",   p_norm_shr, width = 16, height = 5, dpi = 300)
 
@@ -694,7 +694,11 @@ p_norm_shr
 ```
 
 
-############### Chromosome enrichment (observed vs expected)############
+############### Chromosome enrichment (normalised by arm length)############
+
+All tested Ensembl IDs across bins are retrieved and mapped to GRCh38 positions via Ensembl. Midpoints are computed per gene, and UCSC cytoBand (hg38) is used to define centromere spans and obtain p/q arm lengths for chromosomes 1–22, X and Y. Each gene is then assigned to an arm (p or q) by comparing its midpoint to the centromere. Significant genes are aggregated per age bin, chromosome arm and direction (higher in Male/Female), using the appropriate LFC source (raw for the unshrunken set, shrunken for the shrunken set). Counts are normalised by arm length to DEGs per 10 Mb. 
+
+
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
@@ -716,7 +720,7 @@ gene_pos <- getBM(
   filter(chromosome_name %in% c(as.character(1:22), "X", "Y")) %>%
   mutate(mid_bp = 0.5 * (start_position + end_position))
 
-# UCSC cytoBand (hg38) → centromeres → arm lengths
+# UCSC cytoBand (hg38) to centromeres to arm lengths
 session <- browserSession("UCSC"); genome(session) <- "hg38"
 cyto <- rtracklayer::getTable(ucscTableQuery(session, table = "cytoBand")) %>%
   mutate(chrom = sub("^chr","", chrom))
@@ -735,7 +739,7 @@ arm_sizes <- arm_table %>%
          chrom_arm = paste0(chromosome_name, arm),
          len_Mb = len_bp / 1e6)
 
-# Map each gene to its arm
+# Map each gene to its chromo arm
 gene_arm <- gene_pos %>%
   inner_join(arm_table, by = "chromosome_name") %>%
   mutate(arm = ifelse(mid_bp < p_len_bp, "p", "q"),
@@ -747,13 +751,12 @@ gene_arm <- gene_pos %>%
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-ARM_LEN_FLOOR_MB <- 5    # change to 1 if you prefer no/less floor
+ARM_LEN_FLOOR_MB <- 5 
 
 arm_rates_from_list <- function(sig_list, type_label = c("Unshrunken","Shrunken")[1]) {
-  # Which LFC column to use for direction?
   dir_col <- if (identical(type_label, "Shrunken")) "lfc_shr" else "lfc_raw"
 
-  # Build DEG table with direction per contrast
+  # DEG table with direction per contrast
   deg_dir <- map_dfr(names(sig_list), function(cn){
     df <- sig_list[[cn]]
     if (is.null(df) || nrow(df) == 0)
@@ -790,108 +793,49 @@ rates_both <- bind_rows(rates_raw, rates_shr)
 
 ```{r fig.width=15, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
+#Unshrunken   
 p_raw <- ggplot(rates_raw, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
   geom_col(position = "dodge") +
   facet_wrap(~ contrast, ncol = 3, scales = "free_y") +
   scale_fill_manual(values = c("higher_in_Male"="tomato", "higher_in_Female"="royalblue"),
                     name = "Direction") +
-  labs(title = "DEG distribution across chromosome arms — Unshrunken",
-       subtitle = paste0("Normalised by arm size (DEGs per 10 Mb; floor ", ARM_LEN_FLOOR_MB, " Mb)"),
+  labs(title = "DEG distribution across chromosome arms: Unshrunken",
+subtitle = "Normalised by arm size (DEGs per 10 Mb)",
        x = "Chromosome arm", y = "DEGs per 10 Mb") +
   theme_minimal(base_size = 12) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+p_raw
 
+#Shrunken
 p_shr <- ggplot(rates_shr, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
   geom_col(position = "dodge") +
   facet_wrap(~ contrast, ncol = 3, scales = "free_y") +
   scale_fill_manual(values = c("higher_in_Male"="tomato", "higher_in_Female"="royalblue"),
                     name = "Direction") +
-  labs(title = "DEG distribution across chromosome arms — Shrunken",
-       subtitle = paste0("Normalised by arm size (DEGs per 10 Mb; floor ", ARM_LEN_FLOOR_MB, " Mb)"),
+  labs(title = "DEG distribution across chromosome arms: Shrunken",
+      subtitle = "Normalised by arm size (DEGs per 10 Mb)",
        x = "Chromosome arm", y = "DEGs per 10 Mb") +
   theme_minimal(base_size = 12) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
 
-# (B) Or, one grid with Type on rows
+#SHRUnken + unshrunken
 p_both <- ggplot(rates_both, aes(x = chrom_arm, y = rate_per_10Mb, fill = dir)) +
   geom_col(position = "dodge") +
   facet_grid(Type ~ contrast, scales = "free_y") +
   scale_fill_manual(values = c("higher_in_Male"="tomato", "higher_in_Female"="royalblue"),
                     name = "Direction") +
   labs(title = "DEG distribution across chromosome arms",
-       subtitle = paste0("Normalised by arm size (DEGs per 10 Mb; floor ", ARM_LEN_FLOOR_MB, " Mb)"),
+       subtitle = "Normalised by arm size (DEGs per 10 Mb)",
        x = "Chromosome arm", y = "DEGs per 10 Mb") +
   theme_minimal(base_size = 12) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
 
-# Show whichever you prefer:
-p_raw
 p_shr
 
 ```
 
-
-
-
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-```
-
-
-
-
-
-
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-
-
-```
-
-
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-
-```
-
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-
-
-```
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-```
-
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-```
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-
-```
-
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-```
-
-
 ```{r fig.width=11, fig.height=13, message=FALSE, warning=FALSE, echo=TRUE}
-
+sessionInfo()
 
 ```
 
